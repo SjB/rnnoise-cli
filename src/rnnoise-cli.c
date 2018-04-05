@@ -25,6 +25,7 @@
 */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <sndfile.h>
 #include <rnnoise.h>
 
@@ -35,8 +36,6 @@ int main(int argc, char **argv) {
   float x[FRAME_SIZE];
   SNDFILE *in, *out;
   SF_INFO sf_info;
-  DenoiseState *st;
-  st = rnnoise_create();
   if (argc!=3) {
     fprintf(stderr, "usage: %s <noisy speech> <output denoised>\n", argv[0]);
     return 1;
@@ -56,28 +55,40 @@ int main(int argc, char **argv) {
     return err;
   }
  
-  while (1) {
-    short tmp[FRAME_SIZE];
-    sf_count_t r = sf_readf_short(in, tmp, FRAME_SIZE);
-    for (i=0;i<FRAME_SIZE;i++) {
-      x[i] = tmp[i];
-      //fprintf(stderr, "R: %ld\t: %d\n", r, tmp[i]);
-    }
-    rnnoise_process_frame(st, x, x);
-    for (i=0;i<FRAME_SIZE;i++) {
-      tmp[i] = x[i]; 
-    }
-
-    sf_count_t w = sf_writef_short(out, tmp, r);
-
-    // for (i=0;i<FRAME_SIZE;i++) {
-    //   fprintf(stderr, "W: %ld\t: %d\n", w, tmp[i]);
-    // }
     
+  fprintf(stderr, "file info: channels %d\n", sf_info.channels);
+  float* tmp = (float*)malloc(sizeof(float)*FRAME_SIZE*sf_info.channels);
+  DenoiseState **st = (DenoiseState**)malloc(sizeof(DenoiseState*) * sf_info.channels);
+
+  for (int c = 0; c < sf_info.channels; c++)
+    st[c] = rnnoise_create();
+  while (1) {
+    // clear the buffer with zero
+    for (i=0; i < FRAME_SIZE * sf_info.channels; i++) tmp[i]=0;
+
+    sf_count_t r = sf_readf_float(in, tmp, FRAME_SIZE);
+
+    for (int ch = 0; ch < sf_info.channels; ch++) {
+      for (i=0;i<FRAME_SIZE;i++) {
+	x[i] = tmp[sf_info.channels * i + ch] * UINT16_MAX;
+      }
+
+      rnnoise_process_frame(st[ch], x, x);
+
+      for (i=0;i<FRAME_SIZE;i++) {
+	tmp[sf_info.channels * i + ch] = x[i] / UINT16_MAX; 
+      }
+    }
+    
+    sf_writef_float(out, tmp, r);
+
     if (r != FRAME_SIZE) break;
   }
-  rnnoise_destroy(st);
+  free(tmp);
+  for (int c = 0; c < sf_info.channels; c++)
+    rnnoise_destroy(st[c]);
   
+  free(st);
   sf_close(in);
   sf_close(out);
   return 0;
